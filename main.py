@@ -27,10 +27,22 @@ def load_mnist_labels(filename):
 def preprocess_images(images):
     num_images = images.shape[0]
     processed_images = np.zeros((num_images, 8, 8), dtype=np.float32)
+    
     for i in range(num_images):
-        resized = cv2.resize(images[i], (8, 8), interpolation=cv2.INTER_AREA)
-        _, bw = cv2.threshold(resized, 35, 255, cv2.THRESH_BINARY)
+        # 1. 依然保留裁剪：切除边缘 4 个像素的纯黑无用区域，提取中心 20x20
+        cropped = images[i][4:24, 4:24]
+        
+        # 【关键修改 1】：删掉 cv2.dilate 膨胀操作，保持原始笔画粗细
+        
+        # 2. 直接下采样到 8x8
+        resized = cv2.resize(cropped, (8, 8), interpolation=cv2.INTER_AREA)
+        
+        # 【关键修改 2】：把阈值提回到 127 左右 (100~130 都是不错的甜点区)
+        # 这能把 INTER_AREA 产生的浅灰色晕染边过滤掉，只保留核心高亮笔画
+        _, bw = cv2.threshold(resized, 115, 255, cv2.THRESH_BINARY)
+        
         processed_images[i] = bw / 255.0
+        
     return processed_images.reshape(num_images, 64)
 
 # ==========================================
@@ -69,7 +81,7 @@ def export_to_logisim_hex(tensor, filename):
     # 3. 转换为 Logisim 兼容的十六进制字符串 (处理 8-bit 补码)
     # 负数在 8-bit 下的补码计算：val & 0xFF
     flat_data = quantized.flatten().tolist()
-    hex_strings = [f"{val & 0xFF:02x}" for val in flat_data]
+    hex_strings = [f"{val & 0xFFFF:04x}" for val in flat_data]
     
     # 4. 写入文件
     with open(filename, 'w') as f:
