@@ -11,7 +11,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from torch.optim.lr_scheduler import StepLR, CosineAnnealingLR
 
 # ==========================================
-# 1. 数据读取与预处理模块 (保持不变)
+# 1. 数据读取与预处理模块
 # ==========================================
 def load_mnist_images(filename):
     with open(filename, 'rb') as f:
@@ -29,16 +29,13 @@ def preprocess_images(images):
     processed_images = np.zeros((num_images, 8, 8), dtype=np.float32)
     
     for i in range(num_images):
-        # 1. 依然保留裁剪：切除边缘 4 个像素的纯黑无用区域，提取中心 20x20
+        # 边缘裁切
         cropped = images[i][4:24, 4:24]
         
-        # 【关键修改 1】：删掉 cv2.dilate 膨胀操作，保持原始笔画粗细
-        
-        # 2. 直接下采样到 8x8
+        # 下采样到 8x8
         resized = cv2.resize(cropped, (8, 8), interpolation=cv2.INTER_AREA)
         
-        # 【关键修改 2】：把阈值提回到 127 左右 (100~130 都是不错的甜点区)
-        # 这能把 INTER_AREA 产生的浅灰色晕染边过滤掉，只保留核心高亮笔画
+        # 二值化
         _, bw = cv2.threshold(resized, 115, 255, cv2.THRESH_BINARY)
         
         processed_images[i] = bw / 255.0
@@ -46,13 +43,12 @@ def preprocess_images(images):
     return processed_images.reshape(num_images, 64)
 
 # ==========================================
-# 2. PyTorch 模型定义
+# 2. 模型
 # ==========================================
 class MLP_64_16_10(nn.Module):
     def __init__(self):
         super(MLP_64_16_10, self).__init__()
-        # 在硬件电路中，偏置项(bias)往往会增加加法器的开销。
-        # 如果你想在 Logisim 中极简实现，可以将 bias=False，此处暂时保留默认 (bias=True)
+        # 不要使用偏置
         self.fc1 = nn.Linear(64, 16, bias=False)
         self.relu = nn.ReLU()
         self.fc2 = nn.Linear(16, 10, bias=False)
@@ -64,7 +60,7 @@ class MLP_64_16_10(nn.Module):
         return x
 
 # ==========================================
-# 3. 辅助函数：导出为 Logisim ROM 格式
+# 3. 辅助函数
 # ==========================================
 def export_to_logisim_hex(tensor, filename):
     """
@@ -97,7 +93,7 @@ def export_to_logisim_hex(tensor, filename):
 # 4. 主程序
 # ==========================================
 def main():
-    # --- 1. 设备检查 (Apple Silicon MPS 加速) ---
+    # --- 1. 可选硬件加速 ---
     """
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -108,7 +104,7 @@ def main():
     """
     device = torch.device("cpu")  # CPU 其实更快
 
-    # --- 请在此处替换为你本地 MNIST 数据集的路径 ---
+    # ---  MNIST 数据集的路径 ---
     train_images_path = 'dataset/train-images-idx3-ubyte'
     train_labels_path = 'dataset/train-labels-idx1-ubyte'
     val_images_path = 'dataset/t10k-images-idx3-ubyte'
@@ -129,7 +125,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=1000, shuffle=False)
 
-    # 模型放到目标设备
+    
     model = MLP_64_16_10().to(device)
     best_model = model.state_dict()
     best_val_acc = 0.0
@@ -138,8 +134,7 @@ def main():
     
     epochs = 500
 
-    # 【关键修改】：加入 weight_decay (L2 正则化)
-    # 这会惩罚过大的权重值，使权重分布更加均匀，大幅降低 INT8 量化时的精度损失
+    # weight_decay (L2 正则化) 惩罚过大的权重值，使权重分布更加均匀，降低 INT8 量化精度损失
     optimizer = optim.Adam(model.parameters(), lr=0.006, weight_decay=1e-4)
 
     # 学习率调度器
@@ -150,7 +145,7 @@ def main():
         model.train()
         total_loss = 0
         for batch_x, batch_y in train_loader:
-            # 数据放到目标设备
+
             batch_x, batch_y = batch_x.to(device), batch_y.to(device)
             
             optimizer.zero_grad()
@@ -182,7 +177,7 @@ def main():
     # 5. 导出 Logisim INT8 权重
     # ==========================================
     print("\n--- 正在提取并量化权重用于 Logisim ---")
-    # 将模型权重拉回 CPU 进行处理
+
     model.to("cpu") 
     
     # 提取第一层 (64x16) 和 第二层 (16x10) 的权重
@@ -191,7 +186,6 @@ def main():
     
     export_to_logisim_hex(w1, "logisim_fc1_weights.txt")
     export_to_logisim_hex(w2, "logisim_fc2_weights.txt")
-    print("注意: Logisim 中使用 ROM 载入这些文件。电路中的乘法器需设置为 8-bit 2的补码(2's complement)模式。")
 
 if __name__ == '__main__':
     main()
